@@ -62,7 +62,27 @@ revoke all on table public.player_roles from anon, authenticated;
 revoke all on table public.game_actions from anon, authenticated;
 
 -- Private Realtime channels are named room:<SIX_CHARACTER_CODE>.
--- Only authenticated members of that room may subscribe to its broadcasts.
+-- A SECURITY DEFINER helper checks membership without granting table reads.
+create or replace function public.is_room_member(room_topic text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $
+  select exists (
+    select 1
+    from public.players p
+    join public.rooms r on r.id = p.room_id
+    where p.user_id = auth.uid()
+      and ('room:' || r.code) = room_topic
+  );
+$;
+
+revoke all on function public.is_room_member(text) from public;
+grant execute on function public.is_room_member(text) to authenticated;
+
+-- Only authenticated members of a room may subscribe to its broadcasts.
 drop policy if exists "Room members can receive room broadcasts" on realtime.messages;
 create policy "Room members can receive room broadcasts"
 on realtime.messages
@@ -70,11 +90,5 @@ for select
 to authenticated
 using (
   realtime.topic() like 'room:%'
-  and exists (
-    select 1
-    from public.players p
-    join public.rooms r on r.id = p.room_id
-    where p.user_id = auth.uid()
-      and ('room:' || r.code) = realtime.topic()
-  )
+  and public.is_room_member(realtime.topic())
 );
