@@ -512,7 +512,7 @@ function App() {
         </section>
       ) : null}
 
-      <footer className="footer"><span>Мафия онлайн</span><span>Играйте честно. Подозревайте всех.</span></footer>
+      <footer className="footer"><span>Мафия онлайн</span><span>Играйте честно. Гасите всех.</span></footer>
     </main>
   );
 }
