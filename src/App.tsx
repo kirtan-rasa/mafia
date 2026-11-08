@@ -102,8 +102,21 @@ function App() {
         setBoot("ready");
         const invite = new URLSearchParams(window.location.search).get("room");
         if (invite) {
+          const inviteCode = invite.toUpperCase().slice(0, 6);
           setMode("join");
-          setCode(invite.toUpperCase().slice(0, 6));
+          setCode(inviteCode);
+          try {
+            const restored = await callGame<RoomData>("get_room", { code: inviteCode });
+            if (restored.room.status !== "waiting") {
+              restored.my_role = await callGame<Role>("get_my_role", { code: inviteCode });
+            }
+            if (!active) return;
+            applyData(restored);
+            setScreen("room");
+            localStorage.setItem("mafia:last-room", inviteCode);
+          } catch {
+            // This is a new invitee, not a returning member. Keep the join form open.
+          }
           return;
         }
         const remembered = localStorage.getItem("mafia:last-room");
