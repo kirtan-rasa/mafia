@@ -11,3 +11,12 @@
 @media(max-width:700px){.app-shell{width:calc(100% - 32px)}.topbar{height:70px}.brand{font-size:20px}.brand-mark{width:36px;height:36px}.connection-state{font-size:9px}.home-layout{display:flex;flex-direction:column;align-items:stretch;gap:30px;padding:48px 0 58px}.welcome-copy h1{font-size:clamp(42px,11vw,56px);letter-spacing:-2.5px}.welcome-copy>p{font-size:14px}.quick-facts{gap:12px 18px;margin-top:23px}.quick-facts span{font-size:11px}.entry-card{padding:23px 19px}.entry-card h2{font-size:24px}.room-screen{padding-top:30px}.room-heading{align-items:stretch;flex-direction:column;gap:18px}.room-heading h1{font-size:35px}.room-heading p{font-size:13px}.invite-card{min-width:0;width:100%}.room-grid{grid-template-columns:1fr;gap:13px}.players-panel,.game-panel,.chat-panel{padding:19px}.player-row{min-height:62px;gap:9px}.player-name strong{font-size:13px}.host-label,.ready-label,.waiting-label,.dead-role{font-size:8px}.target-list{grid-template-columns:1fr}.chat-form{grid-template-columns:1fr}.chat-form .primary-button{width:100%}.chat-message{grid-template-columns:1fr auto;gap:4px 9px}.chat-message span{grid-column:1/-1;grid-row:2}.chat-message time{grid-column:2;grid-row:1}.footer{min-height:60px;flex-wrap:wrap;padding:14px 0}.footer span:last-child{display:none}}
 @media(max-width:390px){.app-shell{width:calc(100% - 24px)}.entry-tabs button{font-size:11px;gap:6px}.connection-state{letter-spacing:0}.room-code-top{font-size:8px}.panel-title{align-items:flex-start;flex-direction:column}.player-row{gap:7px}.host-label,.ready-label,.waiting-label,.dead-role{font-size:7px}.player-avatar{width:34px;height:34px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+/* hCaptcha onboarding */
+.captcha-gate{display:flex;flex-direction:column;gap:8px;margin-top:19px;padding:15px;border:1px solid rgba(215,184,121,.25);border-radius:6px;background:rgba(5,10,12,.22)}
+.captcha-gate>div:first-child strong{display:block;color:#e7d4a8;font-size:13px}
+.captcha-gate>div:first-child p{margin:5px 0 0;color:#aeb5ad;font-size:12px;line-height:1.6}
+.captcha-widget{display:flex;align-items:center;justify-content:flex-start;min-height:78px;max-width:100%;overflow-x:auto}
+.captcha-error{margin:2px 0 0;color:#efb1a9;font-size:11px;line-height:1.55}
+.captcha-widget iframe{max-width:100%}
+@media(max-width:390px){.captcha-gate{padding:12px}.captcha-widget{justify-content:center}}
