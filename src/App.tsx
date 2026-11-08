@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -58,7 +58,6 @@ function shuffle<T,>(items: T[]): T[] {
 function App() {
   const [screen, setScreen] = useState<Screen>("home");
   const [name, setName] = useState("");
-  const [roomCode, setRoomCode] = useState("");
   const [players, setPlayers] = useState<DemoPlayer[]>(initialPlayers);
   const [rolesDealt, setRolesDealt] = useState(false);
   const [showRole, setShowRole] = useState(false);
@@ -385,7 +384,7 @@ function ArrowUpRightIcon() {
   return <ArrowRight size={15} className="diagonal-arrow" />;
 }
 
-function Step({ number, icon, title, text }: { number: string; icon: React.ReactNode; title: string; text: string }) {
+function Step({ number, icon, title, text }: { number: string; icon: ReactNode; title: string; text: string }) {
   return (
     <article className="step-card">
       <div className="step-top"><span>{number}</span><div className="step-icon">{icon}</div></div>
