@@ -1,530 +1,408 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
-  Check,
-  CircleHelp,
-  Crown,
-  Eye,
-  Fingerprint,
-  LockKeyhole,
-  Moon,
-  Plus,
-  Shield,
-  Sparkles,
-  Sun,
-  Users,
-  VenetianMask,
-  Vote,
-  X,
+  AlertCircle, ArrowLeft, ArrowRight, Check, Clipboard, Crown, Eye, EyeOff,
+  LoaderCircle, LockKeyhole, LogOut, MessageCircle, Moon, Send, Shield,
+  Sun, Users, VenetianMask, Vote, Wifi, WifiOff,
 } from "lucide-react";
+import { callGame, isSupabaseConfigured, supabase } from "./lib/supabase";
 
-type Screen = "home" | "lobby";
-type EntryMode = "create" | "join";
-type Phase = "lobby" | "night" | "day";
-
-type DemoPlayer = {
-  id: number;
-  name: string;
-  initials: string;
-  color: string;
-  isHost?: boolean;
-  isYou?: boolean;
-  role?: string;
+type Phase = "waiting" | "night" | "day" | "voting" | "finished";
+type Player = {
+  id: string; nickname: string; is_alive: boolean; is_ready: boolean;
+  is_host: boolean; revealed_role: string | null;
 };
-
-const sampleGuests: DemoPlayer[] = [
-  { id: 2, name: "Alex", initials: "A", color: "blue" },
-  { id: 3, name: "Mia", initials: "M", color: "rose" },
-  { id: 4, name: "Noah", initials: "N", color: "green" },
-  { id: 5, name: "Sam", initials: "S", color: "violet" },
-  { id: 6, name: "Jamie", initials: "J", color: "orange" },
-];
-
-const roleSet = ["Mafia", "Mafia", "Doctor", "Detective", "Civilian", "Civilian"];
-
-const phaseDescriptions: Record<Phase, string> = {
-  lobby: "Players gather here before the host starts the game.",
-  night: "The Mafia acts in secret while special roles use their abilities.",
-  day: "Everyone discusses what happened and tries to identify the Mafia.",
+type Room = {
+  id: string; code: string; status: Phase; winner: "mafia" | "town" | null;
+  round_number: number; settings: { max_players: number };
 };
+type Message = { id: string; nickname: string; body: string; created_at: string };
+type Role = {
+  role: "mafia" | "doctor" | "detective" | "civilian" | null;
+  team: string[];
+  investigation: { nickname: string; is_mafia: boolean } | null;
+};
+type RoomData = { room: Room; players: Player[]; messages: Message[]; my_role?: Role };
 
-function shuffle<T,>(items: T[]): T[] {
-  const result = [...items];
-
-  for (let i = result.length - 1; i > 0; i -= 1) {
-    const random = new Uint32Array(1);
-    crypto.getRandomValues(random);
-    const j = random[0] % (i + 1);
-    [result[i], result[j]] = [result[j], result[i]];
-  }
-
-  return result;
-}
+const roleNames: Record<string, string> = {
+  mafia: "Мафия", doctor: "Доктор", detective: "Комиссар", civilian: "Мирный житель",
+};
+const roleDescriptions: Record<string, string> = {
+  mafia: "Ночью выберите игрока, которого хотите вывести из игры. Действуйте сообща.",
+  doctor: "Ночью выберите игрока, которого хотите защитить.",
+  detective: "Ночью проверьте одного игрока. Результат увидите только вы.",
+  civilian: "У вас нет ночного действия. Обсуждайте события днём и ищите мафию.",
+};
+const phaseNames: Record<Phase, string> = {
+  waiting: "Сбор игроков", night: "Ночь", day: "Обсуждение",
+  voting: "Голосование", finished: "Игра завершена",
+};
 
 function App() {
-  const [screen, setScreen] = useState<Screen>("home");
-  const [entryMode, setEntryMode] = useState<EntryMode>("create");
-  const [name, setName] = useState("");
-  const [roomCode, setRoomCode] = useState("");
-  const [joinFeedback, setJoinFeedback] = useState(false);
-  const [players, setPlayers] = useState<DemoPlayer[]>([]);
-  const [rolesDealt, setRolesDealt] = useState(false);
-  const [showRole, setShowRole] = useState(false);
-  const [activePhase, setActivePhase] = useState<Phase>("lobby");
-  const [showRules, setShowRules] = useState(false);
-
-  const currentPlayer = useMemo(
-    () => players.find((player) => player.isYou),
-    [players],
+  const [boot, setBoot] = useState<"loading" | "ready" | "config" | "error">("loading");
+  const [bootMessage, setBootMessage] = useState("");
+  const [screen, setScreen] = useState<"home" | "room">("home");
+  const [mode, setMode] = useState<"create" | "join">(
+    new URLSearchParams(window.location.search).has("room") ? "join" : "create",
   );
+  const [nickname, setNickname] = useState(() => localStorage.getItem("mafia:nickname") ?? "");
+  const [code, setCode] = useState(() => new URLSearchParams(window.location.search).get("room")?.toUpperCase() ?? "");
+  const [maxPlayers, setMaxPlayers] = useState("10");
+  const [data, setData] = useState<RoomData | null>(null);
+  const [myRole, setMyRole] = useState<Role | null>(null);
+  const [roleShown, setRoleShown] = useState(false);
+  const [target, setTarget] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [copied, setCopied] = useState(false);
 
-  const scrollToGameCard = () => {
-    setEntryMode("create");
-    setJoinFeedback(false);
-    document.getElementById("play")?.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-    });
+  const room = data?.room ?? null;
+  const players = data?.players ?? [];
+  const messages = data?.messages ?? [];
+  const me = players.find((p) => p.nickname.toLocaleLowerCase() === nickname.trim().toLocaleLowerCase());
+  const isHost = Boolean(me?.is_host);
+  const alive = players.filter((p) => p.is_alive);
+  const readyCount = players.filter((p) => p.is_ready).length;
+
+  const applyData = useCallback((next: RoomData) => {
+    setData(next);
+    if (next.my_role) setMyRole(next.my_role);
+    if (next.room.status === "waiting") setMyRole(null);
+    if (next.room.status === "finished") setRoleShown(true);
+    setTarget("");
+    setError("");
+  }, []);
+
+  const refresh = useCallback(async (roomCode?: string) => {
+    const lookup = roomCode ?? room?.code;
+    if (!lookup) return;
+    const next = await callGame<RoomData>("get_room", { code: lookup });
+    if (next.room.status !== "waiting") {
+      next.my_role = await callGame<Role>("get_my_role", { code: lookup });
+    }
+    applyData(next);
+  }, [applyData, room?.code]);
+
+  useEffect(() => {
+    let active = true;
+    const init = async () => {
+      if (!isSupabaseConfigured || !supabase) {
+        if (active) setBoot("config");
+        return;
+      }
+      try {
+        const { data: session, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (!session.session) {
+          const { error: authError } = await supabase.auth.signInAnonymously();
+          if (authError) throw authError;
+        }
+        if (!active) return;
+        setBoot("ready");
+        const invite = new URLSearchParams(window.location.search).get("room");
+        if (invite) {
+          setMode("join");
+          setCode(invite.toUpperCase().slice(0, 6));
+          return;
+        }
+        const remembered = localStorage.getItem("mafia:last-room");
+        if (remembered) {
+          try {
+            const next = await callGame<RoomData>("get_room", { code: remembered });
+            if (next.room.status !== "waiting") next.my_role = await callGame<Role>("get_my_role", { code: remembered });
+            if (!active) return;
+            applyData(next);
+            setScreen("room");
+          } catch {
+            localStorage.removeItem("mafia:last-room");
+          }
+        }
+      } catch (cause) {
+        if (!active) return;
+        setBoot("error");
+        setBootMessage(cause instanceof Error ? cause.message : "Не удалось создать гостевую сессию.");
+      }
+    };
+    void init();
+    return () => { active = false; };
+  }, [applyData]);
+
+  useEffect(() => {
+    if (!room || !supabase) return;
+    const channel = supabase.channel("mafia-room-" + room.id)
+      .on("postgres_changes", { event: "*", schema: "public", table: "rooms", filter: "id=eq." + room.id }, () => { void refresh(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "players", filter: "room_id=eq." + room.id }, () => { void refresh(); })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "room_messages", filter: "room_id=eq." + room.id }, () => { void refresh(); })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [room?.id, refresh]);
+
+  const run = async <T,>(action: string, payload: Record<string, unknown> = {}): Promise<T | null> => {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      return await callGame<T>(action, payload);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось выполнить действие.");
+      return null;
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const switchEntryMode = (mode: EntryMode) => {
-    setEntryMode(mode);
-    setJoinFeedback(false);
+  const openRoom = (next: RoomData, cleanName: string) => {
+    applyData(next);
+    setNickname(cleanName);
+    localStorage.setItem("mafia:nickname", cleanName);
+    localStorage.setItem("mafia:last-room", next.room.code);
+    setScreen("room");
+    setRoleShown(false);
+    const url = new URL(window.location.href);
+    url.searchParams.set("room", next.room.code);
+    window.history.replaceState({}, "", url.toString());
   };
 
-  const handleEntrySubmit = (event: FormEvent<HTMLFormElement>) => {
+  const enter = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-
-    if (entryMode === "join") {
-      setJoinFeedback(true);
+    const cleanName = nickname.trim();
+    if (cleanName.length < 2 || cleanName.length > 18) {
+      setError("Никнейм должен содержать от 2 до 18 символов.");
       return;
     }
-
-    const safeName = name.trim().slice(0, 18);
-    const host: DemoPlayer = {
-      id: 1,
-      name: safeName,
-      initials: safeName.slice(0, 1).toUpperCase(),
-      color: "gold",
-      isHost: true,
-      isYou: true,
-    };
-
-    setPlayers([host, ...sampleGuests]);
-    setRolesDealt(false);
-    setShowRole(false);
-    setActivePhase("lobby");
-    setScreen("lobby");
+    setBusy(true);
+    setError("");
+    try {
+      const next = mode === "create"
+        ? await callGame<RoomData>("create_room", { nickname: cleanName, max_players: Number(maxPlayers) })
+        : await callGame<RoomData>("join_room", { nickname: cleanName, code: code.trim().toUpperCase() });
+      openRoom(next, cleanName);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось открыть комнату.");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const dealDemoRoles = () => {
-    const assigned = shuffle(roleSet).map((role, index) => ({
-      ...players[index],
-      role,
-    }));
-
-    setPlayers(assigned);
-    setRolesDealt(true);
-    setShowRole(false);
-    setActivePhase("night");
+  const roomAction = async (action: string, payload: Record<string, unknown> = {}) => {
+    if (!room) return null;
+    const result = await run<RoomData>(action, { code: room.code, ...payload });
+    if (result && result.room) applyData(result);
+    return result;
   };
 
-  const leavePreview = () => {
-    setScreen("home");
-    setRolesDealt(false);
-    setShowRole(false);
-    setActivePhase("lobby");
-    setJoinFeedback(false);
+  const leave = async () => {
+    if (!room) return;
+    const result = await run<{ left: boolean }>("leave_room", { code: room.code });
+    if (!result) return;
+    localStorage.removeItem("mafia:last-room");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("room");
+    window.history.replaceState({}, "", url.toString());
+    setData(null); setMyRole(null); setScreen("home");
+    setNotice("Вы покинули комнату.");
   };
 
-  if (screen === "lobby") {
-    return (
-      <main className="app-shell lobby-shell">
-        <header className="topbar">
-          <button className="brand brand-button" onClick={leavePreview} aria-label="Back to Mafia home">
-            <span className="brand-mark"><VenetianMask size={19} strokeWidth={1.8} /></span>
-            <span>mafia<span className="brand-period">.</span></span>
-          </button>
-          <div className="topbar-right">
-            <span className="preview-pill"><span className="status-dot" /> Local preview</span>
-            <button className="icon-button" onClick={() => setShowRules(true)} aria-label="How to play">
-              <CircleHelp size={18} />
-            </button>
-          </div>
-        </header>
+  const copyInvite = async () => {
+    if (!room) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("room", room.code);
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1700);
+    } catch {
+      setError("Не удалось скопировать ссылку. Скопируйте адрес из строки браузера.");
+    }
+  };
 
-        <div className="preview-notice" role="status">
-          <LockKeyhole size={16} />
-          <span><strong>You're exploring a demo.</strong> This room and its sample players exist only in this browser. No one else can join it yet.</span>
-        </div>
+  const selectedTargets = useMemo(() => alive.filter((p) => {
+    if (p.id === me?.id && myRole?.role === "mafia") return false;
+    if (room?.status === "voting" && p.id === me?.id) return false;
+    return true;
+  }), [alive, me?.id, myRole?.role, room?.status]);
 
-        <section className="lobby-heading">
-          <div>
-            <button className="back-link" onClick={leavePreview}><ArrowLeft size={15} /> Back to home</button>
-            <div className="eyebrow"><span className="eyebrow-line" /> HOST VIEW · PREVIEW</div>
-            <h1>The table is <em>yours.</em></h1>
-            <p>Here's what your room could look like before a game begins.</p>
-          </div>
-          <div className="room-code-card">
-            <span className="mini-label">ROOM STATUS</span>
-            <strong>NOT LIVE</strong>
-            <p>A shareable invite appears when online rooms are enabled.</p>
-          </div>
-        </section>
+  const nightAction = async () => {
+    if (!myRole?.role || !target) return;
+    const action = myRole.role === "mafia" ? "night_kill"
+      : myRole.role === "doctor" ? "protect"
+      : myRole.role === "detective" ? "investigate" : null;
+    if (!action) return;
+    const next = await roomAction("night_action", { action, target_player_id: target });
+    if (next) setNotice("Действие принято. Ожидаем завершения ночи ведущим.");
+  };
 
-        <div className="lobby-grid">
-          <section className="panel players-panel">
-            <div className="panel-heading">
-              <div>
-                <div className="section-kicker">SAMPLE GUEST LIST</div>
-                <h2>Example roster <span className="count-badge">{players.length} players</span></h2>
-              </div>
-              <span className="live-label">ILLUSTRATION</span>
-            </div>
-            <div className="player-list">
-              {players.map((player, index) => (
-                <div className="player-row" key={player.id}>
-                  <span className={"avatar avatar-" + player.color}>{player.initials}</span>
-                  <span className="player-name">
-                    <strong>{player.name}{player.isYou ? " (you)" : ""}</strong>
-                    <small>{player.isHost ? "Room host" : "Sample guest"}</small>
-                  </span>
-                  {player.isHost ? (
-                    <span className="host-tag"><Crown size={12} /> HOST</span>
-                  ) : (
-                    <span className="sample-tag">DEMO</span>
-                  )}
-                  <span className="player-number">{String(index + 1).padStart(2, "0")}</span>
-                </div>
-              ))}
-            </div>
-            <div className="invite-placeholder">
-              <LockKeyhole size={16} />
-              <span><strong>Invitations aren't live yet</strong><small>When multiplayer is connected, you'll be able to copy a private room link here.</small></span>
-            </div>
-          </section>
+  const submitMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!message.trim()) return;
+    const next = await roomAction("send_message", { message: message.trim() });
+    if (next) setMessage("");
+  };
 
-          <aside className="panel setup-panel">
-            <div className="section-kicker">EXAMPLE GAME SETUP</div>
-            <h2>A six-player table</h2>
-            <p className="muted-copy">A sample role mix for demonstrating the host flow.</p>
-            <div className="role-settings">
-              <div className="role-setting">
-                <span className="role-icon role-mafia"><VenetianMask size={16} /></span>
-                <span><strong>Mafia</strong><small>Secret team</small></span>
-                <b>2</b>
-              </div>
-              <div className="role-setting">
-                <span className="role-icon role-doctor"><Shield size={16} /></span>
-                <span><strong>Doctor</strong><small>Protect one player</small></span>
-                <b>1</b>
-              </div>
-              <div className="role-setting">
-                <span className="role-icon role-detective"><Eye size={16} /></span>
-                <span><strong>Detective</strong><small>Investigate a player</small></span>
-                <b>1</b>
-              </div>
-              <div className="role-setting">
-                <span className="role-icon role-civilian"><Users size={16} /></span>
-                <span><strong>Civilian</strong><small>Find the Mafia</small></span>
-                <b>2</b>
-              </div>
-            </div>
-            <div className="setup-total"><span>ROLES IN THIS PREVIEW</span><strong>06 <small>/ 06</small></strong></div>
-            <button className="primary-button full-button" onClick={dealDemoRoles}>
-              <Sparkles size={17} /> {rolesDealt ? "Shuffle sample roles" : "Preview role reveal"}
-              <ArrowRight size={16} />
-            </button>
-            <p className="fine-print"><LockKeyhole size={13} /> This is a local demonstration. Real role assignment must happen privately on the server.</p>
-          </aside>
-        </div>
-
-        {rolesDealt && (
-          <section className="panel role-reveal-panel">
-            <div className="role-reveal-copy">
-              <div className="section-kicker">ROLE REVEAL · PREVIEW</div>
-              <h2>Your sample role is ready.</h2>
-              <p>This card demonstrates the private reveal step. In a live game, the server will show each player only their own role.</p>
-            </div>
-            <div className="role-card-wrap">
-              <div className={"role-card " + (showRole ? "is-revealed" : "")}>
-                <div className="role-card-pattern"><Fingerprint size={38} strokeWidth={1.1} /></div>
-                {showRole ? (
-                  <>
-                    <span className="mini-label">YOUR SAMPLE ROLE</span>
-                    <strong>{currentPlayer?.role ?? "Civilian"}</strong>
-                    <small>{currentPlayer?.role === "Mafia" ? "Stay calm. Keep your cover." : "Listen closely. Trust carefully."}</small>
-                  </>
-                ) : (
-                  <>
-                    <span className="mini-label">ROLE HIDDEN</span>
-                    <strong>???</strong>
-                    <small>Reveal when you're ready</small>
-                  </>
-                )}
-              </div>
-              <button className="reveal-button" onClick={() => setShowRole((value) => !value)} aria-pressed={showRole}>
-                <Eye size={15} /> {showRole ? "Hide sample role" : "Reveal sample role"}
-              </button>
-            </div>
-            <div className="phase-switcher">
-              <span className="mini-label">EXPLORE THE GAME PHASES</span>
-              <div role="group" aria-label="Preview game phases">
-                <button className={activePhase === "night" ? "phase-active" : ""} onClick={() => setActivePhase("night")} aria-pressed={activePhase === "night"}><Moon size={14} /> Night</button>
-                <button className={activePhase === "day" ? "phase-active" : ""} onClick={() => setActivePhase("day")} aria-pressed={activePhase === "day"}><Sun size={14} /> Day</button>
-                <button className={activePhase === "lobby" ? "phase-active" : ""} onClick={() => setActivePhase("lobby")} aria-pressed={activePhase === "lobby"}><Users size={14} /> Lobby</button>
-              </div>
-              <p className="phase-description" aria-live="polite">{phaseDescriptions[activePhase]}</p>
-            </div>
-          </section>
-        )}
-        {showRules && <RulesDialog onClose={() => setShowRules(false)} />}
-      </main>
-    );
+  if (boot === "loading") {
+    return <main className="app-shell loading-screen"><LoaderCircle className="spin" size={30} /><p>Подключаемся к игре…</p></main>;
   }
 
   return (
-    <main className="app-shell home-shell">
+    <main className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="Mafia home">
-          <span className="brand-mark"><VenetianMask size={19} strokeWidth={1.8} /></span>
-          <span>mafia<span className="brand-period">.</span></span>
-        </a>
-        <nav className="main-nav" aria-label="Main navigation">
-          <a href="#how-it-works">How it works</a>
-          <a href="#roles">Roles</a>
-        </nav>
+        <button className="brand" onClick={() => { if (screen === "room") void leave(); else window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+          <span className="brand-mark"><VenetianMask size={21} /></span><span>Мафия<span className="brand-period">.</span></span>
+        </button>
         <div className="topbar-right">
-          <span className="topbar-note"><span className="status-dot" /> Free to play</span>
-          <button className="nav-cta" onClick={scrollToGameCard}>Create a room <ArrowRight size={15} /></button>
+          {screen === "room" && room ? (
+            <>
+              <span className="room-code-top">КОМНАТА {room.code}</span>
+              <button className="icon-button" onClick={copyInvite} aria-label="Скопировать приглашение">{copied ? <Check size={18} /> : <Clipboard size={18} />}</button>
+              <button className="icon-button" onClick={() => void leave()} disabled={busy} aria-label="Покинуть комнату"><LogOut size={18} /></button>
+            </>
+          ) : (
+            <span className={boot === "ready" ? "connection-state online" : "connection-state offline"}>
+              {boot === "ready" ? <><Wifi size={15} /> Сервер подключён</> : <><WifiOff size={15} /> Нет подключения</>}
+            </span>
+          )}
         </div>
       </header>
 
-      <section className="hero" id="top">
-        <div className="hero-copy">
-          <div className="eyebrow"><span className="eyebrow-line" /> THE CLASSIC GAME. A NEW TABLE.</div>
-          <h1>Trust is a<br />dangerous <em>game.</em></h1>
-          <p className="hero-description">Bring your people together for a round of secrets, suspicion, and clever lies. Set up your table, then invite your group when live rooms launch.</p>
-          <div className="hero-actions">
-            <button className="primary-button" onClick={scrollToGameCard}>Start a game <ArrowRight size={17} /></button>
-            <a className="text-link" href="#how-it-works">See how it works <ArrowRight size={15} /></a>
-          </div>
-          <div className="hero-proof">
-            <div className="avatar-stack" aria-hidden="true">
-              <span className="stack-avatar stack-one">A</span>
-              <span className="stack-avatar stack-two">M</span>
-              <span className="stack-avatar stack-three">J</span>
-              <span className="stack-avatar stack-four">K</span>
+      {screen === "home" ? (
+        <section className="home-layout">
+          <div className="welcome-copy">
+            <span className="eyebrow"><span className="eyebrow-line" /> ОНЛАЙН · БЕСПЛАТНО</span>
+            <h1>Соберите друзей.<br /><em>Найдите мафию.</em></h1>
+            <p>Создайте комнату, отправьте ссылку друзьям и играйте прямо в браузере. Без установки приложений.</p>
+            <div className="quick-facts">
+              <span><Users size={17} /> 4–12 игроков</span>
+              <span><LockKeyhole size={17} /> Личные роли</span>
+              <span><Wifi size={17} /> Живые обновления</span>
             </div>
-            <span><strong>Made for your group</strong><small>No downloads. Play right in your browser.</small></span>
-          </div>
-        </div>
-
-        <div className="hero-art" aria-label="Atmospheric illustration of a city at night and a game table">
-          <div className="art-glow" />
-          <div className="art-orbit orbit-one" />
-          <div className="art-orbit orbit-two" />
-          <div className="moon-disc" />
-          <div className="city-silhouette city-back">
-            <i /><i /><i /><i /><i /><i /><i />
-          </div>
-          <div className="city-silhouette city-front">
-            <i /><i /><i /><i /><i /><i /><i /><i />
-          </div>
-          <div className="art-table">
-            <div className="table-top" />
-            <div className="table-leg" />
-            <div className="table-glass" />
-          </div>
-          <div className="art-caption"><span>01 / 04</span><span>THE CITY NEVER SLEEPS</span></div>
-          <div className="art-corner-mark"><VenetianMask size={24} /></div>
-        </div>
-      </section>
-
-      <section className="play-section" id="play">
-        <div className="play-intro">
-          <span className="section-kicker">YOUR NEXT GAME STARTS HERE</span>
-          <h2>One room.<br /><em>Everyone invited.</em></h2>
-          <p>Create a room for your group, or join one with a room code. Start with a preview of the host flow while online rooms are being built.</p>
-          <div className="trust-note"><LockKeyhole size={16} /><span><strong>Secret roles stay secret</strong><small>Live games will use server-side role delivery so no player can inspect someone else's role.</small></span></div>
-        </div>
-
-        <div className="create-card">
-          <div className="card-topline">
-            <span className="section-kicker">GET TO THE TABLE</span>
-            <span className="step-label">INTERACTIVE PREVIEW</span>
-          </div>
-          <div className="card-tabs" role="tablist" aria-label="Choose what you want to do">
-            <button
-              className={"tab " + (entryMode === "create" ? "active-tab" : "")}
-              type="button"
-              role="tab"
-              aria-selected={entryMode === "create"}
-              aria-controls="room-entry-panel"
-              onClick={() => switchEntryMode("create")}
-            >
-              Create a room <Plus size={15} />
-            </button>
-            <button
-              className={"tab " + (entryMode === "join" ? "active-tab" : "")}
-              type="button"
-              role="tab"
-              aria-selected={entryMode === "join"}
-              aria-controls="room-entry-panel"
-              onClick={() => switchEntryMode("join")}
-            >
-              Join a room <ArrowRight size={15} />
-            </button>
           </div>
 
-          <form id="room-entry-panel" role="tabpanel" onSubmit={handleEntrySubmit}>
-            <label className="field-label" htmlFor="nickname">YOUR NICKNAME</label>
-            <div className="input-wrap">
-              <Users size={17} aria-hidden="true" />
-              <input
-                id="nickname"
-                name="nickname"
-                type="text"
-                autoComplete="nickname"
-                minLength={2}
-                maxLength={18}
-                required
-                placeholder="e.g. Alex"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                aria-describedby="nickname-help"
-              />
-              <span className="input-counter">{name.length}/18</span>
+          <section className="entry-card panel">
+            <span className="section-kicker">НАЧАТЬ ИГРУ</span>
+            <h2>{mode === "create" ? "Создать комнату" : "Войти по приглашению"}</h2>
+            <div className="entry-tabs" role="tablist" aria-label="Действие">
+              <button type="button" role="tab" aria-selected={mode === "create"} className={mode === "create" ? "selected" : ""} onClick={() => { setMode("create"); setError(""); }}><span className="plus-mark">+</span> Создать</button>
+              <button type="button" role="tab" aria-selected={mode === "join"} className={mode === "join" ? "selected" : ""} onClick={() => { setMode("join"); setError(""); }}><ArrowRight size={17} /> Войти по коду</button>
             </div>
-            <p id="nickname-help" className="field-help">2–18 characters. This is how your friends will see you.</p>
+            <form className="entry-form" onSubmit={enter}>
+              <label htmlFor="nickname">Ваш никнейм</label>
+              <input id="nickname" value={nickname} onChange={(e) => setNickname(e.target.value)} minLength={2} maxLength={18} required placeholder="Например, Алекс" autoComplete="nickname" />
+              {mode === "create" ? (
+                <>
+                  <label htmlFor="max-players">Размер комнаты</label>
+                  <select id="max-players" value={maxPlayers} onChange={(e) => setMaxPlayers(e.target.value)}>
+                    <option value="6">До 6 игроков</option><option value="8">До 8 игроков</option><option value="10">До 10 игроков</option><option value="12">До 12 игроков</option>
+                  </select>
+                </>
+              ) : (
+                <>
+                  <label htmlFor="room-code">Код комнаты</label>
+                  <input id="room-code" className="code-field" value={code} onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} minLength={6} maxLength={6} pattern="[A-Z0-9]{6}" required placeholder="A7K9QP" autoComplete="off" />
+                </>
+              )}
+              <button className="primary-button submit-button" type="submit" disabled={busy || boot !== "ready"}>
+                {busy ? <LoaderCircle className="spin" size={19} /> : mode === "create" ? <Users size={19} /> : <ArrowRight size={19} />}
+                {busy ? "Подождите…" : mode === "create" ? "Создать комнату" : "Присоединиться"}
+              </button>
+            </form>
 
-            {entryMode === "join" && (
-              <div className="join-code-field">
-                <label className="field-label" htmlFor="room-code">ROOM CODE</label>
-                <div className="input-wrap code-input-wrap">
-                  <LockKeyhole size={17} aria-hidden="true" />
-                  <input
-                    id="room-code"
-                    name="room-code"
-                    type="text"
-                    autoComplete="off"
-                    inputMode="text"
-                    minLength={6}
-                    maxLength={6}
-                    pattern="[A-Za-z0-9]{6}"
-                    required
-                    placeholder="ABC123"
-                    value={roomCode}
-                    onChange={(event) => {
-                      setRoomCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6));
-                      setJoinFeedback(false);
-                    }}
-                    aria-describedby="room-code-help"
-                  />
-                  <span className="input-counter">{roomCode.length}/6</span>
-                </div>
-                <p id="room-code-help" className="field-help">Enter the 6-character code shared by your host.</p>
+            {boot === "config" && <div className="setup-notice"><AlertCircle size={19} /><div><strong>Сервер ещё не подключён</strong><p>Настройте Supabase: адрес проекта, Publishable key, базу данных и игровую функцию. После этого здесь появятся настоящие комнаты.</p></div></div>}
+            {boot === "error" && <div className="setup-notice error-notice"><AlertCircle size={19} /><div><strong>Не удалось подключиться</strong><p>{bootMessage} Проверьте, включён ли анонимный вход в Supabase.</p></div></div>}
+            {error && <div className="error-message" role="alert"><AlertCircle size={17} />{error}</div>}
+            {notice && <div className="success-message" role="status"><Check size={17} />{notice}</div>}
+            <p className="privacy-note"><LockKeyhole size={14} /> Достаточно никнейма. Аккаунт создавать не нужно.</p>
+          </section>
+        </section>
+      ) : room ? (
+        <section className="room-screen">
+          <div className="room-heading">
+            <div>
+              <button className="back-link" onClick={() => void leave()}><ArrowLeft size={16} /> На главную</button>
+              <span className="eyebrow"><span className="eyebrow-line" /> КОМНАТА {room.code}</span>
+              <h1>{room.status === "waiting" ? "Собираем игроков" : room.status === "finished" ? "Партия завершена" : "Раунд " + room.round_number + " · " + phaseNames[room.status]}</h1>
+              <p>{room.status === "waiting" ? "Отправьте приглашение и дождитесь готовности игроков." : alive.length + " игроков осталось в игре."}</p>
+            </div>
+            <div className="invite-card"><span>КОД ПРИГЛАШЕНИЯ</span><strong>{room.code}</strong><button onClick={copyInvite}><Clipboard size={16} /> {copied ? "Ссылка скопирована" : "Скопировать ссылку"}</button></div>
+          </div>
+
+          {error && <div className="error-message room-alert" role="alert"><AlertCircle size={17} />{error}</div>}
+          {notice && <div className="success-message room-alert" role="status"><Check size={17} />{notice}</div>}
+
+          <div className="room-grid">
+            <section className="panel players-panel">
+              <div className="panel-title"><div><span className="section-kicker">УЧАСТНИКИ</span><h2>Игроки <small>{players.length}/{room.settings.max_players}</small></h2></div><span className="phase-chip">{phaseNames[room.status]}</span></div>
+              <div className="player-list">
+                {players.map((player, index) => (
+                  <div className={"player-row" + (!player.is_alive ? " player-dead" : "")} key={player.id}>
+                    <span className={"player-avatar avatar-" + (index % 6)}>{player.nickname.slice(0, 1).toUpperCase()}</span>
+                    <span className="player-name"><strong>{player.nickname}{player.id === me?.id ? " (вы)" : ""}</strong><small>{player.is_host ? "Ведущий" : !player.is_alive ? "Выбыл из игры" : room.status === "waiting" ? "Участник" : "В игре"}</small></span>
+                    {player.is_host ? <span className="host-label"><Crown size={14} /> ВЕДУЩИЙ</span>
+                      : player.revealed_role ? <span className="dead-role">{roleNames[player.revealed_role] ?? player.revealed_role}</span>
+                      : room.status === "waiting" ? <span className={player.is_ready ? "ready-label" : "waiting-label"}>{player.is_ready ? <><Check size={14} /> ГОТОВ</> : "ОЖИДАЕТ"}</span> : null}
+                  </div>
+                ))}
               </div>
-            )}
+              {room.status === "waiting" && (
+                <div className="lobby-actions">
+                  <div className="ready-summary"><strong>{readyCount} из {players.length}</strong><span>игроков готовы</span></div>
+                  <button className={me?.is_ready ? "secondary-button" : "primary-button"} onClick={() => void roomAction("set_ready")} disabled={busy}>{me?.is_ready ? <><Check size={18} /> Вы готовы</> : <>Отметиться готовым <ArrowRight size={17} /></>}</button>
+                  {isHost && <button className="start-button" onClick={() => void roomAction("start_game")} disabled={busy || players.length < 4 || readyCount !== players.length}>Начать игру <ArrowRight size={18} /></button>}
+                  {isHost && <p className="hint-copy">{players.length < 4 ? "Для начала нужно минимум 4 игрока." : readyCount !== players.length ? "Дождитесь готовности всех игроков." : "Все готовы. Можно начинать!"}</p>}
+                </div>
+              )}
+            </section>
 
-            <button className="primary-button create-button" type="submit">
-              {entryMode === "create" ? "Preview host lobby" : "Check room code"}
-              <ArrowRight size={17} />
-            </button>
-          </form>
+            <section className="panel game-panel">
+              {room.status === "waiting" ? (
+                <>
+                  <span className="section-kicker">ПЕРЕД НАЧАЛОМ</span><h2>Как начать партию</h2>
+                  <div className="instructions-list">
+                    <div><span>1</span><p>Скопируйте ссылку и отправьте её друзьям.</p></div>
+                    <div><span>2</span><p>Каждый вводит никнейм и нажимает «Готов».</p></div>
+                    <div><span>3</span><p>Когда соберутся минимум 4 игрока, ведущий запускает игру.</p></div>
+                  </div>
+                  <div className="role-count-hint"><Shield size={19} /><p>Роли раздаются случайно. Каждый видит только собственную роль.</p></div>
+                </>
+              ) : room.status === "finished" ? (
+                <div className="finished-state"><span className="section-kicker">ПОБЕДИТЕЛЬ</span><div className="winner-icon">{room.winner === "mafia" ? <VenetianMask size={32} /> : <Shield size={32} />}</div><h2>{room.winner === "mafia" ? "Победила мафия" : "Победили мирные жители"}</h2><p>Партия завершена. Можно покинуть комнату и создать новую.</p></div>
+              ) : (
+                <div className="active-game">
+                  <div className="phase-heading"><span className="section-kicker">ТЕКУЩАЯ ФАЗА</span><span className="phase-chip">{room.status === "night" ? <><Moon size={14} /> Ночь</> : room.status === "day" ? <><Sun size={14} /> День</> : <><Vote size={14} /> Голосование</>}</span></div>
+                  <div className="my-role-card">
+                    <div className="role-card-top"><span>ВАША РОЛЬ</span><button onClick={() => setRoleShown((v) => !v)} aria-label={roleShown ? "Скрыть роль" : "Показать роль"}>{roleShown ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
+                    <div className="role-card-content">{roleShown ? <strong>{myRole?.role ? roleNames[myRole.role] : "Загрузка роли…"}</strong> : <strong className="hidden-role">••••••••</strong>}<p>{roleShown && myRole?.role ? roleDescriptions[myRole.role] : "Нажмите на значок глаза, чтобы посмотреть свою роль."}</p></div>
+                    {roleShown && myRole?.role === "mafia" && myRole.team.length > 0 && <div className="team-note">Ваша команда: {myRole.team.join(", ")}</div>}
+                    {myRole?.investigation && <div className="investigation-result">Проверка: <strong>{myRole.investigation.nickname}</strong> — {myRole.investigation.is_mafia ? "мафия" : "не мафия"}.</div>}
+                  </div>
 
-          {entryMode === "join" && joinFeedback && (
-            <div className="inline-feedback" role="status" aria-live="polite">
-              <LockKeyhole size={17} />
-              <span><strong>Online rooms aren't connected yet.</strong><small>That code can't be checked in this preview. Once multiplayer is live, this will take you straight into your friends' room.</small></span>
-            </div>
-          )}
-          {entryMode === "create" && (
-            <div className="preview-footnote"><LockKeyhole size={13} /> Opens a local demo. It won't create a shareable room yet.</div>
-          )}
-
-          <div className="divider-label"><span /> INCLUDED IN THE GAME <span /></div>
-          <div className="feature-mini-grid">
-            <div><VenetianMask size={16} /><span>Secret roles</span></div>
-            <div><Vote size={16} /><span>Group voting</span></div>
-            <div><Moon size={16} /><span>Day & night</span></div>
-            <div><LockKeyhole size={16} /><span>Private rooms</span></div>
+                  {room.status === "night" && myRole?.role && ["mafia", "doctor", "detective"].includes(myRole.role) && me?.is_alive && (
+                    <div className="action-box"><h3>{myRole.role === "mafia" ? "Выберите цель" : myRole.role === "doctor" ? "Кого защитить?" : "Кого проверить?"}</h3><p>{roleDescriptions[myRole.role]}</p>
+                      <div className="target-list">{selectedTargets.map((p) => <button key={p.id} className={target === p.id ? "target-button target-selected" : "target-button"} onClick={() => setTarget(p.id)}><span className="player-avatar small-avatar">{p.nickname.slice(0,1).toUpperCase()}</span>{p.nickname}{target === p.id && <Check size={17} />}</button>)}</div>
+                      <button className="primary-button action-submit" disabled={busy || !target} onClick={() => void nightAction()}>Подтвердить действие <ArrowRight size={17} /></button>
+                    </div>
+                  )}
+                  {room.status === "night" && (!me?.is_alive || myRole?.role === "civilian") && <p className="phase-message">Этой ночью у вас нет действия. Дождитесь утра.</p>}
+                  {room.status === "day" && <><div className="day-message"><Sun size={21} /><div><strong>Время обсуждения</strong><p>Обсудите события ночи и попробуйте определить, кто играет за мафию.</p></div></div>{isHost ? <button className="primary-button phase-button" disabled={busy} onClick={() => void roomAction("advance_phase")}>Перейти к голосованию <ArrowRight size={17} /></button> : <p className="phase-message">Ведущий начнёт голосование, когда обсуждение закончится.</p>}</>}
+                  {room.status === "voting" && me?.is_alive && <div className="action-box"><h3>За кого голосуете?</h3><p>Свой голос можно изменить до завершения голосования.</p><div className="target-list">{selectedTargets.map((p) => <button key={p.id} className={target === p.id ? "target-button target-selected" : "target-button"} onClick={() => setTarget(p.id)}><span className="player-avatar small-avatar">{p.nickname.slice(0,1).toUpperCase()}</span>{p.nickname}{target === p.id && <Check size={17} />}</button>)}</div><button className="primary-button action-submit" disabled={busy || !target} onClick={() => void roomAction("vote", { target_player_id: target })}>Отдать голос <Vote size={17} /></button></div>}
+                  {room.status === "voting" && !me?.is_alive && <p className="phase-message">Вы выбыли и больше не можете голосовать.</p>}
+                  {(room.status === "night" || room.status === "voting") && isHost && <button className="primary-button phase-button" disabled={busy} onClick={() => void roomAction("advance_phase")}>{room.status === "night" ? "Завершить ночь" : "Подвести итоги голосования"} <ArrowRight size={17} /></button>}
+                  {(room.status === "night" || room.status === "voting") && !isHost && <p className="phase-message">Ожидаем ведущего: он завершит текущую фазу.</p>}
+                </div>
+              )}
+            </section>
           </div>
-        </div>
-      </section>
 
-      <section className="steps-section" id="how-it-works">
-        <div className="section-heading">
-          <span className="section-kicker">A FEW SIMPLE STEPS</span>
-          <h2>From link to <em>last one standing.</em></h2>
-        </div>
-        <div className="steps-grid">
-          <Step number="01" icon={<Plus size={19} />} title="Create your room" text="Choose a nickname and set up a private table for your group." />
-          <Step number="02" icon={<Users size={19} />} title="Gather your people" text="Share the room link. Friends join in their browser without installing anything." />
-          <Step number="03" icon={<VenetianMask size={19} />} title="Let the game begin" text="Deal secret roles, move through day and night, and vote together." />
-        </div>
-      </section>
+          {room.status === "day" && <section className="panel chat-panel">
+            <div className="panel-title"><div><span className="section-kicker">ОБЩИЙ ЧАТ</span><h2><MessageCircle size={20} /> Обсуждение</h2></div><span className="chat-limit">До 500 символов</span></div>
+            <div className="message-list" aria-live="polite">{messages.length === 0 ? <p className="empty-copy">Чат пока пуст. Начните обсуждение.</p> : messages.map((m) => <div className="chat-message" key={m.id}><strong>{m.nickname}</strong><span>{m.body}</span><time>{new Date(m.created_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</time></div>)}</div>
+            {me?.is_alive ? <form className="chat-form" onSubmit={submitMessage}><input value={message} maxLength={500} onChange={(e) => setMessage(e.target.value)} placeholder="Напишите сообщение…" /><button className="primary-button" disabled={busy || !message.trim()}><Send size={18} /> Отправить</button></form> : <p className="phase-message">Вы выбыли и больше не можете писать.</p>}
+          </section>}
+        </section>
+      ) : null}
 
-      <section className="roles-section" id="roles">
-        <div>
-          <span className="section-kicker">KNOW YOUR PART</span>
-          <h2>Every role has<br /><em>a story to tell.</em></h2>
-        </div>
-        <div className="role-preview-grid">
-          <RolePreview icon={<VenetianMask size={18} />} tone="mafia" title="Mafia" text="Stay hidden. Outnumber the town." />
-          <RolePreview icon={<Shield size={18} />} tone="doctor" title="Doctor" text="Protect one player each night." />
-          <RolePreview icon={<Eye size={18} />} tone="detective" title="Detective" text="Investigate and uncover the truth." />
-          <RolePreview icon={<Users size={18} />} tone="town" title="Civilian" text="Discuss, vote, and find the Mafia." />
-        </div>
-      </section>
-
-      <footer className="footer">
-        <a className="brand" href="#top"><span className="brand-mark"><VenetianMask size={17} /></span><span>mafia<span className="brand-period">.</span></span></a>
-        <span>Made for friends, powered by suspicion.</span>
-        <a href="https://github.com/kirtan-rasa/mafia" target="_blank" rel="noreferrer">Open source on GitHub <ArrowRight size={14} /></a>
-      </footer>
-      {showRules && <RulesDialog onClose={() => setShowRules(false)} />}
+      <footer className="footer"><span>Мафия онлайн</span><span>Играйте честно. Подозревайте всех.</span></footer>
     </main>
-  );
-}
-
-function Step({ number, icon, title, text }: { number: string; icon: ReactNode; title: string; text: string }) {
-  return (
-    <article className="step-card">
-      <div className="step-top"><span>{number}</span><div className="step-icon">{icon}</div></div>
-      <h3>{title}</h3>
-      <p>{text}</p>
-    </article>
-  );
-}
-
-function RolePreview({ icon, tone, title, text }: { icon: ReactNode; tone: string; title: string; text: string }) {
-  return (
-    <article className="role-preview-card">
-      <span className={"role-icon role-" + tone}>{icon}</span>
-      <div><h3>{title}</h3><p>{text}</p></div>
-    </article>
-  );
-}
-
-function RulesDialog({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="dialog-backdrop" role="presentation" onClick={onClose}>
-      <section className="rules-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onClick={(event) => event.stopPropagation()}>
-        <button className="dialog-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
-        <span className="dialog-icon"><CircleHelp size={22} /></span>
-        <span className="section-kicker">HOW TO PLAY</span>
-        <h2 id="dialog-title">A town full of<br /><em>secrets.</em></h2>
-        <div className="rules-list">
-          <div><Moon size={17} /><span><strong>Night</strong><small>The Mafia chooses a target. Special roles use their abilities in secret.</small></span></div>
-          <div><Sun size={17} /><span><strong>Day</strong><small>Everyone discusses the events of the night and shares suspicions.</small></span></div>
-          <div><Vote size={17} /><span><strong>Vote</strong><small>The group votes to eliminate a player they believe is Mafia.</small></span></div>
-        </div>
-        <p className="rules-note">This site is currently an interface preview. Live rooms and shared gameplay are the next milestone.</p>
-        <button className="primary-button full-button" onClick={onClose}>Got it <Check size={16} /></button>
-      </section>
-    </div>
   );
 }
 

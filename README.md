@@ -1,71 +1,64 @@
-# Mafia
+# Мафия онлайн
 
-A browser-based Mafia game for private friend groups.
+Онлайн-игра в «Мафию» для друзей. Интерфейс на русском языке.
 
-**Current milestone:** interactive UI preview and the initial database schema. The preview is not a live multiplayer game yet. Room creation, cross-device invitations, secure role assignment, and realtime game actions require the Supabase Edge Functions and project configuration in the next milestone.
-
-## Stack
+## Стек
 
 - React + TypeScript + Vite
-- Supabase (Postgres, Auth, Realtime, Edge Functions)
+- Supabase Auth (анонимные игровые сессии)
+- Supabase Postgres + Realtime
+- Supabase Edge Functions
 - GitHub Actions + GitHub Pages
 
-## Run locally
+## Локальный запуск
 
-Requirements: Node.js 22 or newer.
+Нужен Node.js 22 или новее.
 
-```bash
+\`\`\`bash
 npm install
+cp .env.example .env.local
 npm run dev
-```
+\`\`\`
 
-Open the local URL printed by Vite. The current preview works without environment variables.
+Заполните \`.env.local\` значениями Supabase: URL проекта и Publishable key. Без них приложение честно покажет, что сервер не подключён.
 
-## Build
+## Подключение Supabase
 
-```bash
-npm run build
-npm run preview
-```
+1. Создайте проект Supabase.
+2. В **Authentication → Providers → Anonymous Sign-Ins** включите анонимный вход.
+3. Откройте **SQL Editor** и выполните \`supabase/migrations/0001_initial_schema.sql\`.
+4. В **Project Settings → API** скопируйте Project URL и Publishable key.
+5. Заполните локальный \`.env.local\` переменными \`VITE_SUPABASE_URL\` и \`VITE_SUPABASE_PUBLISHABLE_KEY\`.
+6. Установите Supabase CLI, войдите и привяжите проект:
+   \`\`\`bash
+   supabase login
+   supabase link --project-ref YOUR_PROJECT_REF
+   supabase functions deploy game
+   \`\`\`
+7. В GitHub откройте **Settings → Secrets and variables → Actions → Variables** и добавьте переменные с теми же именами:
+   - \`VITE_SUPABASE_URL\`
+   - \`VITE_SUPABASE_PUBLISHABLE_KEY\`
+8. После добавления переменных запустите workflow **Deploy to GitHub Pages** вручную либо отправьте новый коммит.
 
-## Supabase setup (next milestone)
+Edge Function использует серверный secret, который Supabase предоставляет автоматически. Service-role key не нужен в браузере и не должен попадать в GitHub Variables.
 
-1. Create a Supabase project.
-2. Enable anonymous sign-ins in **Authentication → Providers**.
-3. Apply `supabase/migrations/0001_initial_schema.sql` in the SQL Editor or with the Supabase CLI.
-4. Copy the project URL and anon/publishable key into `.env.local` using `.env.example` as a template.
-5. Deploy the Edge Functions that own room creation, joining, starting games, role retrieval, phase transitions, and votes.
+## Что уже реализовано в игровом MVP
 
-Only the anon/publishable key belongs in the browser. **Never put the service-role key in a `VITE_*` variable or commit it to Git.** The `player_roles` table is deliberately inaccessible to browser clients.
+- Создание комнаты с уникальным шестизначным кодом.
+- Вход по коду или пригласительной ссылке.
+- Список участников и готовность игроков в реальном времени.
+- Случайная раздача ролей на сервере.
+- Приватное получение собственной роли.
+- Ночные действия мафии, доктора и комиссара.
+- Дневное обсуждение в общем чате.
+- Голосование и проверка условий победы.
+- Передача ведущего, если он покидает комнату.
 
-## GitHub Pages
+Для старта требуется минимум 4 игрока. На данный момент в MVP нет голосовой связи, таймеров и расширенных пользовательских ролей.
 
-Before the first deployment, open **Settings → Pages** and set **Build and deployment → Source** to **GitHub Actions**. This one-time setting is required before the workflow can publish the site.
+## Безопасность
 
-The workflow in `.github/workflows/deploy.yml` builds and deploys the site on every push to `main`. You can also start a deployment manually from **Actions → Deploy to GitHub Pages → Run workflow**.
-
-The site URL will be:
-
-`https://kirtan-rasa.github.io/mafia/`
-
-## Project structure
-
-```text
-src/
-  App.tsx                 Landing page and interactive lobby preview
-  index.css               Responsive visual system
-  lib/supabase.ts         Optional Supabase browser client
-supabase/
-  migrations/
-    0001_initial_schema.sql
-.github/
-  workflows/
-    deploy.yml
-```
-
-## Security principles
-
-- Role assignments are stored separately from public room/player data.
-- Browser clients must not read game tables directly.
-- Trusted Edge Functions validate membership and game phase before every mutation.
-- Secret roles are returned only to the player who owns the assignment.
+- В браузере используется только Publishable key.
+- Изменения игрового состояния проходят через Edge Function.
+- Таблицы ролей и действий закрыты от прямого клиентского чтения.
+- RLS ограничивает публичные данные участниками соответствующей комнаты.

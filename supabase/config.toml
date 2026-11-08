@@ -1,0 +1,4 @@
+project_id = "mafia"
+
+[functions.game]
+verify_jwt = true
