@@ -20,3 +20,21 @@
 .captcha-error{margin:2px 0 0;color:#efb1a9;font-size:11px;line-height:1.55}
 .captcha-widget iframe{max-width:100%}
 @media(max-width:390px){.captcha-gate{padding:12px}.captcha-widget{justify-content:center}}
+
+/* Host role setup */
+.role-config{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
+.role-config h2{margin:9px 0 7px;font-size:21px}
+.role-config-copy{margin:0 0 14px;color:#aab2aa;font-size:12px;line-height:1.6}
+.role-config-list{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.role-config-item{display:flex;align-items:center;justify-content:space-between;gap:9px;min-height:43px;padding:6px 9px;border:1px solid rgba(230,224,207,.1);border-radius:5px;background:rgba(5,10,12,.2);color:#d8d8cd;font-size:12px}
+.role-config-item input{width:58px;height:31px;padding:0 6px;border:1px solid rgba(225,219,202,.2);border-radius:4px;background:rgba(5,10,12,.42);color:#f0ede4;font:13px var(--mono);text-align:center}
+.role-config-item input:focus{outline:1px solid rgba(215,184,121,.65);border-color:rgba(215,184,121,.65)}
+.role-config-summary{display:flex;align-items:center;justify-content:space-between;margin-top:11px;padding:11px 10px;border-radius:5px;background:rgba(215,184,121,.07);color:#d9cba9;font-size:12px}
+.role-config-summary strong{color:var(--bright);font:16px var(--mono)}
+.role-config-error{margin:10px 0 0;color:#efb1a9;font-size:11px;line-height:1.5}
+.role-config-save{width:100%;margin-top:13px}
+.role-config-preview{padding-bottom:3px}
+.action-stack{display:grid;gap:14px}
+.action-stack .action-box{margin-top:14px}
+@media(max-width:700px){.role-config-list{grid-template-columns:1fr 1fr}}
+@media(max-width:390px){.role-config-list{grid-template-columns:1fr}}

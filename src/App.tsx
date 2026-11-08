@@ -27,31 +27,64 @@ declare global {
 const HCAPTCHA_SITE_KEY = "210c0f1e-b12e-485a-b072-d6deae1e73ca";
 
 type Phase = "waiting" | "night" | "day" | "voting" | "finished";
+type RoleKey = "mafia" | "don" | "doctor" | "detective" | "maniac" | "courtesan" | "barista";
+type RoleCounts = Record<RoleKey, number>;
 type Player = {
   id: string; nickname: string; is_alive: boolean; is_ready: boolean;
   is_host: boolean; revealed_role: string | null;
 };
 type Room = {
-  id: string; code: string; status: Phase; winner: "mafia" | "town" | null;
-  round_number: number; settings: { max_players: number };
+  id: string; code: string; status: Phase; winner: "mafia" | "town" | "maniac" | null;
+  round_number: number; settings: { max_players: number; role_counts?: RoleCounts | null };
 };
 type Message = { id: string; nickname: string; body: string; created_at: string };
 type Role = {
-  role: "mafia" | "doctor" | "detective" | "civilian" | null;
+  role: RoleKey | "civilian" | null;
   team: string[];
-  investigation: { nickname: string; is_mafia: boolean } | null;
+  investigation: { nickname: string; is_mafia: boolean; is_detective: boolean } | null;
 };
 type RoomData = { room: Room; players: Player[]; messages: Message[]; my_role?: Role };
 
 const roleNames: Record<string, string> = {
-  mafia: "Мафия", doctor: "Доктор", detective: "Комиссар", civilian: "Мирный житель",
+  mafia: "Мафия", don: "Дон", doctor: "Доктор", detective: "Комиссар",
+  maniac: "Маньяк", courtesan: "Куртизанка", barista: "Бариста", civilian: "Мирный житель",
 };
 const roleDescriptions: Record<string, string> = {
-  mafia: "Ночью выберите игрока, которого хотите вывести из игры. Действуйте сообща.",
-  doctor: "Ночью выберите игрока, которого хотите защитить.",
-  detective: "Ночью проверьте одного игрока. Результат увидите только вы.",
+  mafia: "Ночью выберите цель вместе с остальными членами мафии.",
+  don: "Вы глава мафии: участвуйте в общем выборе цели и каждую ночь можете проверить, кто является комиссаром.",
+  doctor: "Ночью выберите игрока, которого хотите защитить от ночных нападений.",
+  detective: "Ночью проверьте одного игрока. Вы узнаете, состоит ли он в мафии.",
+  maniac: "Вы играете за себя. Каждую ночь выбирайте игрока для устранения. Ваша цель — остаться последним.",
+  courtesan: "Ночью выберите игрока, чтобы заблокировать его ночное действие.",
+  barista: "Пассивная мирная роль: особого ночного действия пока нет. Ваша сила — обсуждение и голосование.",
   civilian: "У вас нет ночного действия. Обсуждайте события днём и ищите мафию.",
 };
+const roleOptions: { key: RoleKey; label: string }[] = [
+  { key: "mafia", label: "Мафия" },
+  { key: "don", label: "Дон" },
+  { key: "doctor", label: "Доктор" },
+  { key: "detective", label: "Комиссар" },
+  { key: "maniac", label: "Маньяк" },
+  { key: "courtesan", label: "Куртизанка" },
+  { key: "barista", label: "Бариста" },
+];
+function defaultRoleCounts(playerCount: number): RoleCounts {
+  return {
+    mafia: Math.max(1, Math.floor(playerCount / 3)),
+    don: 0,
+    doctor: playerCount >= 5 ? 1 : 0,
+    detective: playerCount >= 6 ? 1 : 0,
+    maniac: 0,
+    courtesan: 0,
+    barista: 0,
+  };
+}
+function selectedRoleCount(counts: RoleCounts): number {
+  return roleOptions.reduce((sum, role) => sum + counts[role.key], 0);
+}
+function sameRoleCounts(a: RoleCounts, b: RoleCounts): boolean {
+  return roleOptions.every((role) => a[role.key] === b[role.key]);
+}
 const phaseNames: Record<Phase, string> = {
   waiting: "Сбор игроков", night: "Ночь", day: "Обсуждение",
   voting: "Голосование", finished: "Игра завершена",
@@ -67,10 +100,12 @@ function App() {
   const [nickname, setNickname] = useState(() => localStorage.getItem("mafia:nickname") ?? "");
   const [code, setCode] = useState(() => new URLSearchParams(window.location.search).get("room")?.toUpperCase() ?? "");
   const [maxPlayers, setMaxPlayers] = useState("10");
+  const [roleCountsDraft, setRoleCountsDraft] = useState<RoleCounts>(() => defaultRoleCounts(1));
   const [data, setData] = useState<RoomData | null>(null);
   const [myRole, setMyRole] = useState<Role | null>(null);
   const [roleShown, setRoleShown] = useState(false);
   const [target, setTarget] = useState("");
+  const [secondaryTarget, setSecondaryTarget] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -82,6 +117,10 @@ function App() {
   const room = data?.room ?? null;
   const players = data?.players ?? [];
   const messages = data?.messages ?? [];
+  const activeRoleCounts = room?.settings.role_counts ?? defaultRoleCounts(players.length);
+  const roleCountsTotal = selectedRoleCount(roleCountsDraft);
+  const roleCountsOverLimit = roleCountsTotal > players.length;
+  const roleCountsDirty = !sameRoleCounts(roleCountsDraft, activeRoleCounts);
   const me = players.find((p) => p.nickname.toLocaleLowerCase() === nickname.trim().toLocaleLowerCase());
   const isHost = Boolean(me?.is_host);
   const alive = players.filter((p) => p.is_alive);
@@ -93,6 +132,7 @@ function App() {
     if (next.room.status === "waiting") setMyRole(null);
     if (next.room.status === "finished") setRoleShown(true);
     setTarget("");
+    setSecondaryTarget("");
     setError("");
   }, []);
 
@@ -238,6 +278,11 @@ function App() {
   }, [boot, handleCaptchaVerified]);
 
   useEffect(() => {
+    if (!room || room.status !== "waiting") return;
+    setRoleCountsDraft(room.settings.role_counts ?? defaultRoleCounts(players.length));
+  }, [room?.id, room?.status, room?.settings.role_counts, players.length]);
+
+  useEffect(() => {
     const client = supabase;
     if (!room || !client) return;
     const channel = client.channel("mafia-room-" + room.id)
@@ -328,18 +373,35 @@ function App() {
   };
 
   const selectedTargets = useMemo(() => alive.filter((p) => {
-    if (p.id === me?.id && myRole?.role === "mafia") return false;
+    if (p.id === me?.id && ["mafia", "don", "maniac", "courtesan"].includes(myRole?.role ?? "")) return false;
+    if ((myRole?.role === "mafia" || myRole?.role === "don") && myRole.team.includes(p.nickname)) return false;
     if (room?.status === "voting" && p.id === me?.id) return false;
     return true;
-  }), [alive, me?.id, myRole?.role, room?.status]);
+  }), [alive, me?.id, myRole?.role, myRole?.team, room?.status]);
 
-  const nightAction = async () => {
-    if (!myRole?.role || !target) return;
-    const action = myRole.role === "mafia" ? "night_kill"
-      : myRole.role === "doctor" ? "protect"
-      : myRole.role === "detective" ? "investigate" : null;
-    if (!action) return;
-    const next = await roomAction("night_action", { action, target_player_id: target });
+  const updateRoleCount = (role: RoleKey, rawValue: string) => {
+    const requested = rawValue === "" ? 0 : Number(rawValue);
+    const value = Number.isFinite(requested) ? Math.max(0, Math.trunc(requested)) : 0;
+    setRoleCountsDraft((current) => {
+      const otherRoles = selectedRoleCount(current) - current[role];
+      const maximum = Math.max(0, players.length - otherRoles);
+      return { ...current, [role]: Math.min(value, maximum) };
+    });
+  };
+
+  const saveRoleCounts = async () => {
+    if (!room || !isHost) return;
+    if (roleCountsOverLimit) {
+      setError("Количество выбранных ролей не может превышать число игроков.");
+      return;
+    }
+    const result = await roomAction("set_role_counts", { role_counts: roleCountsDraft });
+    if (result) setNotice("Состав ролей сохранён.");
+  };
+
+  const nightAction = async (action: string, selectedTarget: string) => {
+    if (!selectedTarget) return;
+    const next = await roomAction("night_action", { action, target_player_id: selectedTarget });
     if (next) setNotice("Действие принято. Ожидаем завершения ночи ведущим.");
   };
 
@@ -458,8 +520,8 @@ function App() {
                 <div className="lobby-actions">
                   <div className="ready-summary"><strong>{readyCount} из {players.length}</strong><span>игроков готовы</span></div>
                   <button className={me?.is_ready ? "secondary-button" : "primary-button"} onClick={() => void roomAction("set_ready")} disabled={busy}>{me?.is_ready ? <><Check size={18} /> Вы готовы</> : <>Отметиться готовым <ArrowRight size={17} /></>}</button>
-                  {isHost && <button className="start-button" onClick={() => void roomAction("start_game")} disabled={busy || players.length < 4 || readyCount !== players.length}>Начать игру <ArrowRight size={18} /></button>}
-                  {isHost && <p className="hint-copy">{players.length < 4 ? "Для начала нужно минимум 4 игрока." : readyCount !== players.length ? "Дождитесь готовности всех игроков." : "Все готовы. Можно начинать!"}</p>}
+                  {isHost && <button className="start-button" onClick={() => void roomAction("start_game")} disabled={busy || players.length < 4 || readyCount !== players.length || roleCountsDirty || roleCountsOverLimit}>Начать игру <ArrowRight size={18} /></button>}
+                  {isHost && <p className="hint-copy">{players.length < 4 ? "Для начала нужно минимум 4 игрока." : readyCount !== players.length ? "Дождитесь готовности всех игроков." : roleCountsOverLimit ? "Уменьшите количество ролей до числа игроков." : roleCountsDirty ? "Сначала сохраните выбранный состав ролей." : "Все готовы. Можно начинать!"}</p>}
                 </div>
               )}
             </section>
@@ -473,27 +535,75 @@ function App() {
                     <div><span>2</span><p>Каждый вводит никнейм и нажимает «Готов».</p></div>
                     <div><span>3</span><p>Когда соберутся минимум 4 игрока, ведущий запускает игру.</p></div>
                   </div>
-                  <div className="role-count-hint"><Shield size={19} /><p>Роли раздаются случайно. Каждый видит только собственную роль.</p></div>
+                  <div className="role-count-hint"><Shield size={19} /><p>Роли раздаются случайно. Каждый видит только собственную роль. Оставшиеся места автоматически занимают мирные жители.</p></div>
+                  {isHost ? (
+                    <div className="role-config">
+                      <span className="section-kicker">НАСТРОЙКА ВЕДУЩЕГО</span>
+                      <h2>Состав ролей</h2>
+                      <p className="role-config-copy">Выберите количество каждой особой роли. Доступный максимум учитывает уже выбранные роли.</p>
+                      <div className="role-config-list">
+                        {roleOptions.map((role) => {
+                          const maxForRole = Math.max(0, players.length - (roleCountsTotal - roleCountsDraft[role.key]));
+                          return (
+                            <label className="role-config-item" key={role.key}>
+                              <span>{role.label}</span>
+                              <input
+                                aria-label={"Количество: " + role.label}
+                                type="number"
+                                min={0}
+                                max={maxForRole}
+                                step={1}
+                                value={roleCountsDraft[role.key]}
+                                onChange={(event) => updateRoleCount(role.key, event.target.value)}
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <div className="role-config-summary"><span>Мирные жители (остаток)</span><strong>{Math.max(0, players.length - roleCountsTotal)}</strong></div>
+                      {roleCountsOverLimit && <p className="role-config-error">Выбрано больше ролей, чем сейчас игроков. Уменьшите значения.</p>}
+                      <button className="secondary-button role-config-save" onClick={() => void saveRoleCounts()} disabled={busy || !roleCountsDirty || roleCountsOverLimit}>Применить состав</button>
+                      <p className="hint-copy">Любую роль можно выставить в 0. Сумма особых ролей не может превышать число игроков в комнате.</p>
+                    </div>
+                  ) : (
+                    <div className="role-config role-config-preview">
+                      <span className="section-kicker">СОСТАВ ПАРТИИ</span>
+                      <h2>Роли настраивает ведущий</h2>
+                      <p className="role-config-copy">Особые роли: {selectedRoleCount(activeRoleCounts)} из {players.length}. Мирных жителей: {Math.max(0, players.length - selectedRoleCount(activeRoleCounts))}.</p>
+                    </div>
+                  )}
                 </>
               ) : room.status === "finished" ? (
-                <div className="finished-state"><span className="section-kicker">ПОБЕДИТЕЛЬ</span><div className="winner-icon">{room.winner === "mafia" ? <VenetianMask size={32} /> : <Shield size={32} />}</div><h2>{room.winner === "mafia" ? "Победила мафия" : "Победили мирные жители"}</h2><p>Партия завершена. Можно покинуть комнату и создать новую.</p></div>
+                <div className="finished-state"><span className="section-kicker">ПОБЕДИТЕЛЬ</span><div className="winner-icon">{room.winner === "mafia" ? <VenetianMask size={32} /> : <Shield size={32} />}</div><h2>{room.winner === "mafia" ? "Победила мафия" : room.winner === "maniac" ? "Победил маньяк" : "Победили мирные жители"}</h2><p>Партия завершена. Можно покинуть комнату и создать новую.</p></div>
               ) : (
                 <div className="active-game">
                   <div className="phase-heading"><span className="section-kicker">ТЕКУЩАЯ ФАЗА</span><span className="phase-chip">{room.status === "night" ? <><Moon size={14} /> Ночь</> : room.status === "day" ? <><Sun size={14} /> День</> : <><Vote size={14} /> Голосование</>}</span></div>
                   <div className="my-role-card">
                     <div className="role-card-top"><span>ВАША РОЛЬ</span><button onClick={() => setRoleShown((v) => !v)} aria-label={roleShown ? "Скрыть роль" : "Показать роль"}>{roleShown ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
                     <div className="role-card-content">{roleShown ? <strong>{myRole?.role ? roleNames[myRole.role] : "Загрузка роли…"}</strong> : <strong className="hidden-role">••••••••</strong>}<p>{roleShown && myRole?.role ? roleDescriptions[myRole.role] : "Нажмите на значок глаза, чтобы посмотреть свою роль."}</p></div>
-                    {roleShown && myRole?.role === "mafia" && myRole.team.length > 0 && <div className="team-note">Ваша команда: {myRole.team.join(", ")}</div>}
-                    {myRole?.investigation && <div className="investigation-result">Проверка: <strong>{myRole.investigation.nickname}</strong> — {myRole.investigation.is_mafia ? "мафия" : "не мафия"}.</div>}
+                    {roleShown && (myRole?.role === "mafia" || myRole?.role === "don") && myRole.team.length > 0 && <div className="team-note">Ваша команда: {myRole.team.join(", ")}</div>}
+                    {myRole?.investigation && <div className="investigation-result">Проверка: <strong>{myRole.investigation.nickname}</strong> — {myRole.role === "don" ? (myRole.investigation.is_detective ? "комиссар" : "не комиссар") : (myRole.investigation.is_mafia ? "мафия" : "не мафия")}.</div>}
                   </div>
 
-                  {room.status === "night" && myRole?.role && ["mafia", "doctor", "detective"].includes(myRole.role) && me?.is_alive && (
-                    <div className="action-box"><h3>{myRole.role === "mafia" ? "Выберите цель" : myRole.role === "doctor" ? "Кого защитить?" : "Кого проверить?"}</h3><p>{roleDescriptions[myRole.role]}</p>
-                      <div className="target-list">{selectedTargets.map((p) => <button key={p.id} className={target === p.id ? "target-button target-selected" : "target-button"} onClick={() => setTarget(p.id)}><span className="player-avatar small-avatar">{p.nickname.slice(0,1).toUpperCase()}</span>{p.nickname}{target === p.id && <Check size={17} />}</button>)}</div>
-                      <button className="primary-button action-submit" disabled={busy || !target} onClick={() => void nightAction()}>Подтвердить действие <ArrowRight size={17} /></button>
+                  {room.status === "night" && myRole?.role && ["mafia", "don", "doctor", "detective", "maniac", "courtesan"].includes(myRole.role) && me?.is_alive && (
+                    <div className="action-stack">
+                      <div className="action-box">
+                        <h3>{myRole.role === "mafia" || myRole.role === "don" ? "Кого устранить вместе с мафией?" : myRole.role === "doctor" ? "Кого защитить?" : myRole.role === "detective" ? "Кого проверить?" : myRole.role === "maniac" ? "Кого устранить?" : "Чьё действие заблокировать?"}</h3>
+                        <p>{roleDescriptions[myRole.role]}</p>
+                        <div className="target-list">{selectedTargets.map((p) => <button key={p.id} className={target === p.id ? "target-button target-selected" : "target-button"} onClick={() => setTarget(p.id)}><span className="player-avatar small-avatar">{p.nickname.slice(0,1).toUpperCase()}</span>{p.nickname}{target === p.id && <Check size={17} />}</button>)}</div>
+                        <button className="primary-button action-submit" disabled={busy || !target} onClick={() => void nightAction(myRole.role === "mafia" || myRole.role === "don" ? "night_kill" : myRole.role === "doctor" ? "protect" : myRole.role === "detective" ? "investigate" : myRole.role === "maniac" ? "maniac_kill" : "block", target)}>Подтвердить действие <ArrowRight size={17} /></button>
+                      </div>
+                      {myRole.role === "don" && (
+                        <div className="action-box">
+                          <h3>Проверить комиссара</h3>
+                          <p>Выберите игрока. Результат проверки увидите только вы.</p>
+                          <div className="target-list">{selectedTargets.map((p) => <button key={p.id} className={secondaryTarget === p.id ? "target-button target-selected" : "target-button"} onClick={() => setSecondaryTarget(p.id)}><span className="player-avatar small-avatar">{p.nickname.slice(0,1).toUpperCase()}</span>{p.nickname}{secondaryTarget === p.id && <Check size={17} />}</button>)}</div>
+                          <button className="secondary-button action-submit" disabled={busy || !secondaryTarget} onClick={() => void nightAction("don_check", secondaryTarget)}>Проверить игрока <ArrowRight size={17} /></button>
+                        </div>
+                      )}
                     </div>
                   )}
-                  {room.status === "night" && (!me?.is_alive || myRole?.role === "civilian") && <p className="phase-message">Этой ночью у вас нет действия. Дождитесь утра.</p>}
+                  {room.status === "night" && (!me?.is_alive || myRole?.role === "civilian" || myRole?.role === "barista") && <p className="phase-message">Этой ночью у вас нет действия. Дождитесь утра.</p>}
                   {room.status === "day" && <><div className="day-message"><Sun size={21} /><div><strong>Время обсуждения</strong><p>Обсудите события ночи и попробуйте определить, кто играет за мафию.</p></div></div>{isHost ? <button className="primary-button phase-button" disabled={busy} onClick={() => void roomAction("advance_phase")}>Перейти к голосованию <ArrowRight size={17} /></button> : <p className="phase-message">Ведущий начнёт голосование, когда обсуждение закончится.</p>}</>}
                   {room.status === "voting" && me?.is_alive && <div className="action-box"><h3>За кого голосуете?</h3><p>Свой голос можно изменить до завершения голосования.</p><div className="target-list">{selectedTargets.map((p) => <button key={p.id} className={target === p.id ? "target-button target-selected" : "target-button"} onClick={() => setTarget(p.id)}><span className="player-avatar small-avatar">{p.nickname.slice(0,1).toUpperCase()}</span>{p.nickname}{target === p.id && <Check size={17} />}</button>)}</div><button className="primary-button action-submit" disabled={busy || !target} onClick={() => void roomAction("vote", { target_player_id: target })}>Отдать голос <Vote size={17} /></button></div>}
                   {room.status === "voting" && !me?.is_alive && <p className="phase-message">Вы выбыли и больше не можете голосовать.</p>}
