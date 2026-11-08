@@ -382,7 +382,7 @@ function App() {
             <h1>Соберите друзей.<br /><em>Найдите мафию.</em></h1>
             <p>Создайте комнату, отправьте ссылку друзьям и играйте прямо в браузере. Без установки приложений.</p>
             <div className="quick-facts">
-              <span><Users size={17} /> 4–12 игроков</span>
+              <span><Users size={17} /> 4–50 игроков</span>
               <span><LockKeyhole size={17} /> Личные роли</span>
               <span><Wifi size={17} /> Живые обновления</span>
             </div>
@@ -402,7 +402,7 @@ function App() {
                 <>
                   <label htmlFor="max-players">Размер комнаты</label>
                   <select id="max-players" value={maxPlayers} onChange={(e) => setMaxPlayers(e.target.value)}>
-                    <option value="6">До 6 игроков</option><option value="8">До 8 игроков</option><option value="10">До 10 игроков</option><option value="12">До 12 игроков</option>
+                    {Array.from({ length: 47 }, (_, index) => index + 4).map((count) => <option key={count} value={count}>До {count} игроков</option>)}
                   </select>
                 </>
               ) : (
