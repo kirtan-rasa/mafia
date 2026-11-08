@@ -40,9 +40,9 @@ Only the anon/publishable key belongs in the browser. **Never put the service-ro
 
 ## GitHub Pages
 
-The workflow in `.github/workflows/deploy.yml` builds and deploys the site on every push to `main`.
+Before the first deployment, open **Settings → Pages** and set **Build and deployment → Source** to **GitHub Actions**. This one-time setting is required before the workflow can publish the site.
 
-After the first successful workflow run, open **Settings → Pages** and make sure the source is set to **GitHub Actions**.
+The workflow in `.github/workflows/deploy.yml` builds and deploys the site on every push to `main`.
 
 The site URL will be:
 
