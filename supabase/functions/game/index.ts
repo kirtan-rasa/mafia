@@ -93,7 +93,7 @@ async function ownRole(room:Room,player:Player):Promise<J>{
 }
 async function createRoom(uid:string,b:J){
  const nickname=text(b.nickname,"никнейм",2,18);const max=Number(b.max_players??10);
- if(!Number.isInteger(max)||max<4||max>12)throw new Problem("В комнате может быть от 4 до 12 игроков.");
+ if(!Number.isInteger(max)||max<4||max>50)throw new Problem("В комнате может быть от 4 до 50 игроков.");
  let room:Room|null=null;
  for(let i=0;i<6;i++){
   const {data,error}=await db.from("rooms").insert({code:roomCode(),host_user_id:uid,settings:{max_players:max,discussion_seconds:180,voting_seconds:30}}).select("*").single();
