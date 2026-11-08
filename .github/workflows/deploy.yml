@@ -43,7 +43,7 @@ jobs:
           echo "$RUNNER_TEMP/deno" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/deno/deno" --version
       - name: Type-check game Edge Function
-        run: deno check supabase/functions/game/index.ts
+        run: deno check --node-modules-dir=auto supabase/functions/game/index.ts
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
