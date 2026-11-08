@@ -1,10 +1,30 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   AlertCircle, ArrowLeft, ArrowRight, Check, Clipboard, Crown, Eye, EyeOff,
   LoaderCircle, LockKeyhole, LogOut, MessageCircle, Moon, Send, Shield,
   Sun, Users, VenetianMask, Vote, Wifi, WifiOff,
 } from "lucide-react";
 import { callGame, isSupabaseConfigured, supabase } from "./lib/supabase";
+
+type HCaptchaWidgetId = number;
+type HCaptchaOptions = {
+  sitekey: string;
+  theme?: "light" | "dark";
+  callback: (token: string) => void;
+  "expired-callback"?: () => void;
+  "error-callback"?: () => void;
+};
+declare global {
+  interface Window {
+    hcaptcha?: {
+      render: (container: HTMLElement, options: HCaptchaOptions) => HCaptchaWidgetId;
+      reset: (widgetId?: HCaptchaWidgetId) => void;
+      remove?: (widgetId: HCaptchaWidgetId) => void;
+    };
+  }
+}
+
+const HCAPTCHA_SITE_KEY = "418e5250-805e-4ce0-8b40-dbe00252b0e8";
 
 type Phase = "waiting" | "night" | "day" | "voting" | "finished";
 type Player = {
@@ -38,7 +58,7 @@ const phaseNames: Record<Phase, string> = {
 };
 
 function App() {
-  const [boot, setBoot] = useState<"loading" | "ready" | "config" | "error">("loading");
+  const [boot, setBoot] = useState<"loading" | "ready" | "captcha" | "config" | "error">("loading");
   const [bootMessage, setBootMessage] = useState("");
   const [screen, setScreen] = useState<"home" | "room">("home");
   const [mode, setMode] = useState<"create" | "join">(
@@ -56,6 +76,8 @@ function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [copied, setCopied] = useState(false);
+  const captchaContainerRef = useRef<HTMLDivElement>(null);
+  const captchaWidgetIdRef = useRef<HCaptchaWidgetId | null>(null);
 
   const room = data?.room ?? null;
   const players = data?.players ?? [];
@@ -84,6 +106,41 @@ function App() {
     applyData(next);
   }, [applyData, room?.code]);
 
+  const restoreRoom = useCallback(async (isActive: () => boolean) => {
+    const invite = new URLSearchParams(window.location.search).get("room");
+    if (invite) {
+      const inviteCode = invite.toUpperCase().slice(0, 6);
+      setMode("join");
+      setCode(inviteCode);
+      try {
+        const restored = await callGame<RoomData>("get_room", { code: inviteCode });
+        if (restored.room.status !== "waiting") {
+          restored.my_role = await callGame<Role>("get_my_role", { code: inviteCode });
+        }
+        if (!isActive()) return;
+        applyData(restored);
+        setScreen("room");
+        localStorage.setItem("mafia:last-room", inviteCode);
+      } catch {
+        // This is a new invitee, not a returning member. Keep the join form open.
+      }
+      return;
+    }
+
+    const remembered = localStorage.getItem("mafia:last-room");
+    if (remembered) {
+      try {
+        const next = await callGame<RoomData>("get_room", { code: remembered });
+        if (next.room.status !== "waiting") next.my_role = await callGame<Role>("get_my_role", { code: remembered });
+        if (!isActive()) return;
+        applyData(next);
+        setScreen("room");
+      } catch {
+        localStorage.removeItem("mafia:last-room");
+      }
+    }
+  }, [applyData]);
+
   useEffect(() => {
     let active = true;
     const init = async () => {
@@ -94,52 +151,91 @@ function App() {
       try {
         const { data: session, error: sessionError } = await supabase.auth.getSession();
         if (sessionError) throw sessionError;
-        if (!session.session) {
-          const { error: authError } = await supabase.auth.signInAnonymously();
-          if (authError) throw authError;
-        }
         if (!active) return;
-        setBoot("ready");
-        const invite = new URLSearchParams(window.location.search).get("room");
-        if (invite) {
-          const inviteCode = invite.toUpperCase().slice(0, 6);
-          setMode("join");
-          setCode(inviteCode);
-          try {
-            const restored = await callGame<RoomData>("get_room", { code: inviteCode });
-            if (restored.room.status !== "waiting") {
-              restored.my_role = await callGame<Role>("get_my_role", { code: inviteCode });
-            }
-            if (!active) return;
-            applyData(restored);
-            setScreen("room");
-            localStorage.setItem("mafia:last-room", inviteCode);
-          } catch {
-            // This is a new invitee, not a returning member. Keep the join form open.
-          }
+        if (!session.session) {
+          setBoot("captcha");
           return;
         }
-        const remembered = localStorage.getItem("mafia:last-room");
-        if (remembered) {
-          try {
-            const next = await callGame<RoomData>("get_room", { code: remembered });
-            if (next.room.status !== "waiting") next.my_role = await callGame<Role>("get_my_role", { code: remembered });
-            if (!active) return;
-            applyData(next);
-            setScreen("room");
-          } catch {
-            localStorage.removeItem("mafia:last-room");
-          }
-        }
+        setBoot("ready");
+        await restoreRoom(() => active);
       } catch (cause) {
         if (!active) return;
         setBoot("error");
-        setBootMessage(cause instanceof Error ? cause.message : "Не удалось создать гостевую сессию.");
+        setBootMessage(cause instanceof Error ? cause.message : "Не удалось восстановить гостевую сессию.");
       }
     };
     void init();
     return () => { active = false; };
-  }, [applyData]);
+  }, [restoreRoom]);
+
+  const handleCaptchaVerified = useCallback(async (captchaToken: string) => {
+    if (!supabase) return;
+    setBusy(true);
+    setBootMessage("");
+    setError("");
+    try {
+      const { error: authError } = await supabase.auth.signInAnonymously({
+        options: { captchaToken },
+      });
+      if (authError) throw authError;
+      setBoot("ready");
+      await restoreRoom(() => true);
+    } catch (cause) {
+      setBootMessage(cause instanceof Error ? cause.message : "Не удалось создать гостевую сессию.");
+      if (captchaWidgetIdRef.current !== null) {
+        window.hcaptcha?.reset(captchaWidgetIdRef.current);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [restoreRoom]);
+
+  useEffect(() => {
+    if (boot !== "captcha") return;
+    let cancelled = false;
+    let attempts = 0;
+    let pollId: number | undefined;
+
+    const renderWidget = () => {
+      const api = window.hcaptcha;
+      const container = captchaContainerRef.current;
+      if (cancelled || !api || !container || captchaWidgetIdRef.current !== null) return false;
+      try {
+        captchaWidgetIdRef.current = api.render(container, {
+          sitekey: HCAPTCHA_SITE_KEY,
+          theme: "dark",
+          callback: (token) => { void handleCaptchaVerified(token); },
+          "expired-callback": () => setBootMessage("Срок проверки истёк. Подтвердите ещё раз."),
+          "error-callback": () => setBootMessage("Не удалось загрузить CAPTCHA. Проверьте соединение и блокировщики."),
+        });
+        return true;
+      } catch {
+        setBootMessage("Не удалось запустить CAPTCHA. Обновите страницу и попробуйте снова.");
+        return false;
+      }
+    };
+
+    if (!renderWidget()) {
+      pollId = window.setInterval(() => {
+        attempts += 1;
+        if (renderWidget() || attempts >= 100) {
+          if (pollId !== undefined) window.clearInterval(pollId);
+          if (attempts >= 100 && captchaWidgetIdRef.current === null) {
+            setBootMessage("Виджет hCaptcha не загрузился. Проверьте блокировщик рекламы или расширения браузера.");
+          }
+        }
+      }, 100);
+    }
+
+    return () => {
+      cancelled = true;
+      if (pollId !== undefined) window.clearInterval(pollId);
+      if (captchaWidgetIdRef.current !== null) {
+        window.hcaptcha?.remove?.(captchaWidgetIdRef.current);
+        captchaWidgetIdRef.current = null;
+      }
+    };
+  }, [boot, handleCaptchaVerified]);
 
   useEffect(() => {
     const client = supabase;
@@ -322,7 +418,8 @@ function App() {
             </form>
 
             {boot === "config" && <div className="setup-notice"><AlertCircle size={19} /><div><strong>Сервер ещё не подключён</strong><p>Настройте Supabase: адрес проекта, Publishable key, базу данных и игровую функцию. После этого здесь появятся настоящие комнаты.</p></div></div>}
-            {boot === "error" && <div className="setup-notice error-notice"><AlertCircle size={19} /><div><strong>Не удалось подключиться</strong><p>{bootMessage} Проверьте, включён ли анонимный вход в Supabase.</p></div></div>}
+            {boot === "captcha" && <div className="captcha-gate" role="group" aria-label="Проверка hCaptcha"><div><strong>Подтвердите, что вы не робот</strong><p>Проверка защищает создание гостевых игровых сессий.</p></div><div ref={captchaContainerRef} className="captcha-widget" />{bootMessage && <p className="captcha-error" role="alert">{bootMessage}</p>}</div>}
+            {boot === "error" && <div className="setup-notice error-notice"><AlertCircle size={19} /><div><strong>Не удалось подключиться</strong><p>{bootMessage}</p></div></div>}
             {error && <div className="error-message" role="alert"><AlertCircle size={17} />{error}</div>}
             {notice && <div className="success-message" role="status"><Check size={17} />{notice}</div>}
             <p className="privacy-note"><LockKeyhole size={14} /> Достаточно никнейма. Аккаунт создавать не нужно.</p>
