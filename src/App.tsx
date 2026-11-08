@@ -24,7 +24,7 @@ declare global {
   }
 }
 
-const HCAPTCHA_SITE_KEY = "418e5250-805e-4ce0-8b40-dbe00252b0e8";
+const HCAPTCHA_SITE_KEY = "210c0f1e-b12e-485a-b072-d6deae1e73ca";
 
 type Phase = "waiting" | "night" | "day" | "voting" | "finished";
 type Player = {
