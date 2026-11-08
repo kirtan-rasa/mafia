@@ -29,10 +29,19 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
-      - name: Set up Deno
-        uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
+      - name: Install Deno
+        shell: bash
+        run: |
+          set -euo pipefail
+          DENO_VERSION=2.9.8
+          mkdir -p "$RUNNER_TEMP/deno"
+          curl --fail --location --retry 6 --retry-all-errors --retry-delay 4 --connect-timeout 20 \
+            "https://dl.deno.land/release/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" \
+            --output "$RUNNER_TEMP/deno/deno.zip"
+          unzip -oq "$RUNNER_TEMP/deno/deno.zip" -d "$RUNNER_TEMP/deno"
+          chmod +x "$RUNNER_TEMP/deno/deno"
+          echo "$RUNNER_TEMP/deno" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/deno/deno" --version
       - name: Type-check game Edge Function
         run: deno check supabase/functions/game/index.ts
       - uses: actions/configure-pages@v5
