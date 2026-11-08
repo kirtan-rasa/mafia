@@ -129,13 +129,14 @@ function App() {
   }, [applyData]);
 
   useEffect(() => {
-    if (!room || !supabase) return;
-    const channel = supabase.channel("mafia-room-" + room.id)
+    const client = supabase;
+    if (!room || !client) return;
+    const channel = client.channel("mafia-room-" + room.id)
       .on("postgres_changes", { event: "*", schema: "public", table: "rooms", filter: "id=eq." + room.id }, () => { void refresh(); })
       .on("postgres_changes", { event: "*", schema: "public", table: "players", filter: "room_id=eq." + room.id }, () => { void refresh(); })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "room_messages", filter: "room_id=eq." + room.id }, () => { void refresh(); })
       .subscribe();
-    return () => { void supabase.removeChannel(channel); };
+    return () => { void client.removeChannel(channel); };
   }, [room?.id, refresh]);
 
   const run = async <T,>(action: string, payload: Record<string, unknown> = {}): Promise<T | null> => {
