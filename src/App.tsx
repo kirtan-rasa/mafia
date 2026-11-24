@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import {
   AlertCircle, ArrowLeft, ArrowRight, Check, Clipboard, Crown, Eye, EyeOff,
   LoaderCircle, LockKeyhole, LogOut, MessageCircle, Moon, Send, Shield,
-  Sun, Users, Vote, Wifi,
+  Sun, Users, VenetianMask, Vote, Wifi,
 } from "lucide-react";
 import { callGame, isSupabaseConfigured, supabase } from "./lib/supabase";
 
