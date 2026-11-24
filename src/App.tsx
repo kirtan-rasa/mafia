@@ -26,6 +26,15 @@ declare global {
 
 const HCAPTCHA_SITE_KEY = "210c0f1e-b12e-485a-b072-d6deae1e73ca";
 
+function isInvalidStoredSession(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const authError = error as Error & { status?: number; code?: string };
+  return authError.code === "user_not_found" ||
+    authError.status === 401 ||
+    (authError.status === 403 && /user from sub claim.*does not exist|user not found|session not found/i.test(authError.message)) ||
+    /invalid refresh token|refresh token not found|session_not_found|user from sub claim.*does not exist/i.test(authError.message);
+}
+
 type Phase = "waiting" | "night" | "day" | "voting" | "finished";
 type RoleKey = "mafia" | "don" | "doctor" | "detective" | "maniac" | "courtesan" | "barista";
 type RoleCounts = Record<RoleKey, number>;
@@ -182,6 +191,22 @@ function App() {
   }, [applyData]);
 
   useEffect(() => {
+    const client = supabase;
+    if (!client) return;
+    const { data: { subscription } } = client.auth.onAuthStateChange((event) => {
+      if (event !== "SIGNED_OUT") return;
+      setBoot("captcha");
+      setBootMessage("Сохранённая гостевая сессия больше не действительна. Подтвердите проверку, чтобы создать новую.");
+      setScreen("home");
+      setData(null);
+      setMyRole(null);
+      setRoleShown(false);
+      localStorage.removeItem("mafia:last-room");
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
     let active = true;
     const init = async () => {
       if (!isSupabaseConfigured || !supabase) {
@@ -190,12 +215,41 @@ function App() {
       }
       try {
         const { data: session, error: sessionError } = await supabase.auth.getSession();
-        if (sessionError) throw sessionError;
+        if (sessionError) {
+          if (isInvalidStoredSession(sessionError)) {
+            await supabase.auth.signOut({ scope: "local" });
+            if (active) {
+              setBoot("captcha");
+              setBootMessage("Старая гостевая сессия больше не действительна. Подтвердите проверку, чтобы создать новую.");
+            }
+            return;
+          }
+          throw sessionError;
+        }
         if (!active) return;
         if (!session.session) {
           setBoot("captcha");
           return;
         }
+
+        const { data: verified, error: verificationError } = await supabase.auth.getUser();
+        if (verificationError) {
+          if (isInvalidStoredSession(verificationError)) {
+            await supabase.auth.signOut({ scope: "local" });
+            if (active) {
+              setBoot("captcha");
+              setBootMessage("Старая гостевая сессия больше не действительна. Подтвердите проверку, чтобы создать новую.");
+            }
+            return;
+          }
+          throw verificationError;
+        }
+        if (!verified.user) {
+          await supabase.auth.signOut({ scope: "local" });
+          if (active) setBoot("captcha");
+          return;
+        }
+
         setBoot("ready");
         await restoreRoom(() => active);
       } catch (cause) {

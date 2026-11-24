@@ -29,6 +29,10 @@ export async function callGame<T>(action: string, payload: Record<string, unknow
     } catch {
       // Keep the original SDK message if the response has no JSON body.
     }
+    if (response?.status === 401 && /Сессия игрока недействительна|user_not_found|User from sub claim.*does not exist/i.test(message)) {
+      await supabase.auth.signOut({ scope: "local" });
+      throw new Error("Сохранённая гостевая сессия больше не существует. Подтвердите проверку, чтобы войти заново.");
+    }
     throw new Error(message || "Не удалось связаться с игровым сервером.");
   }
   if (data?.error) throw new Error(String(data.error));
