@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import {
   AlertCircle, ArrowLeft, ArrowRight, Check, Clipboard, Crown, Eye, EyeOff,
   LoaderCircle, LockKeyhole, LogOut, MessageCircle, Moon, Send, Shield,
-  Sun, Users, VenetianMask, Vote, Wifi, WifiOff,
+  Sun, Users, Vote, Wifi,
 } from "lucide-react";
 import { callGame, isSupabaseConfigured, supabase } from "./lib/supabase";
 
@@ -472,24 +472,15 @@ function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <button className="brand" onClick={() => { if (screen === "room") void leave(); else window.scrollTo({ top: 0, behavior: "smooth" }); }}>
-          <span className="brand-mark"><VenetianMask size={21} /></span><span>Мафия<span className="brand-period">.</span></span>
-        </button>
-        <div className="topbar-right">
-          {screen === "room" && room ? (
-            <>
-              <span className="room-code-top">КОМНАТА {room.code}</span>
-              <button className="icon-button" onClick={copyInvite} aria-label="Скопировать приглашение">{copied ? <Check size={18} /> : <Clipboard size={18} />}</button>
-              <button className="icon-button" onClick={() => void leave()} disabled={busy} aria-label="Покинуть комнату"><LogOut size={18} /></button>
-            </>
-          ) : (
-            <span className={boot === "ready" ? "connection-state online" : "connection-state offline"}>
-              {boot === "ready" ? <><Wifi size={15} /> Сервер подключён</> : <><WifiOff size={15} /> Нет подключения</>}
-            </span>
-          )}
-        </div>
-      </header>
+      {screen === "room" && room && (
+        <header className="topbar">
+          <div className="topbar-right">
+            <span className="room-code-top">КОМНАТА {room.code}</span>
+            <button className="icon-button" onClick={copyInvite} aria-label="Скопировать приглашение">{copied ? <Check size={18} /> : <Clipboard size={18} />}</button>
+            <button className="icon-button" onClick={() => void leave()} disabled={busy} aria-label="Покинуть комнату"><LogOut size={18} /></button>
+          </div>
+        </header>
+      )}
 
       {screen === "home" ? (
         <section className="home-layout">
