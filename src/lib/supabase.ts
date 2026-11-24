@@ -20,8 +20,8 @@ export async function callGame<T>(action: string, payload: Record<string, unknow
   const { data, error } = await supabase.functions.invoke("game", { body: { action, ...payload } });
   if (error) {
     let message = error.message;
+    const response = error.context as Response | undefined;
     try {
-      const response = error.context as Response | undefined;
       if (response) {
         const body = await response.clone().json() as { error?: string };
         if (body.error) message = body.error;
